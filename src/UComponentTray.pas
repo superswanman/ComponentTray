@@ -534,12 +534,7 @@ begin
   Parent := tmp;
   FSplitter.Parent := nil;
   FSplitter.Parent := tmp;
-  case FSplitter.Align of
-    alLeft: FSplitter.Left := Self.Left + Self.Width;
-    alTop: FSplitter.Top := Self.Top + Self.Height;
-    alRight: FSplitter.Left := Self.Left;
-    alBottom: FSplitter.Top := Self.Top;
-  end;
+  ChangeAlign(Align);
 
   HideNonVisualComponents;
 
@@ -610,6 +605,13 @@ begin
         FSplitter.Height := 3;
       end;
     end;
+  end;
+
+  case FSplitter.Align of
+    alLeft: FSplitter.Left := Self.Left + Self.Width;
+    alTop: FSplitter.Top := Self.Top + Self.Height;
+    alRight: FSplitter.Left := Self.Left;
+    alBottom: FSplitter.Top := Self.Top;
   end;
 
   FListView.Align := alNone;
@@ -815,34 +817,6 @@ begin
     3: TComponentTray(Owner).ChangeAlign(alBottom);
   end;
   TComponentTray(Owner).SaveSettings;
-
-  {
-  case TMenuItem(Sender).MenuIndex of
-    0: TComponentTray(Owner).Align := alLeft;
-    1: TComponentTray(Owner).Align := alTop;
-    2: TComponentTray(Owner).Align := alRight;
-    3: TComponentTray(Owner).Align := alBottom;
-  end;
-  TComponentTray(Owner).FSplitter.Align := TComponentTray(Owner).Align;
-
-  case TMenuItem(Sender).MenuIndex of
-    0, 2: // Left or Right
-    begin
-      TComponentTray(Owner).Width := 120;
-      //TComponentTray(Owner).FListView.IconOptions.Arrangement := iaLeft;
-      TComponentTray(Owner).FSplitter.Width := 3;
-    end;
-    1, 3: // Top or Bottom
-    begin
-      TComponentTray(Owner).Height := 80;
-      TComponentTray(Owner).FListView.IconOptions.Arrangement := iaTop;
-      TComponentTray(Owner).FSplitter.Height := 3;
-    end;
-  end;
-
-  TComponentTray(Owner).FListView.Align := alNone;
-  TComponentTray(Owner).FListView.Align := alClient;
-  }
 end;
 
 { TComponentImageList }
