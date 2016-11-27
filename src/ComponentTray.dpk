@@ -38,6 +38,7 @@ requires
   fmxdesigner;
 
 contains
-  UComponentTray in 'UComponentTray.pas';
+  UComponentTray in 'UComponentTray.pas',
+  UComponentTray.SettingsDlg in 'UComponentTray.SettingsDlg.pas' {SettingDlg};
 
 end.

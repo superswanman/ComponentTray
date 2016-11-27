@@ -14,6 +14,9 @@ procedure Register;
 
 implementation
 
+uses
+  UComponentTray.SettingsDlg;
+
 type
   TDesignNotification = class(TInterfacedObject, IDesignNotification)
   public
@@ -62,6 +65,8 @@ type
     procedure SplitterMoved(Sender: TObject);
     procedure LoadSettings;
     procedure SaveSettings;
+    class procedure UpdateTrays(Style, Position: Integer;
+      SplitterEnabled: Boolean; SplitterColor: TColor); static;
   protected
     procedure Notification(AComponent: TComponent; Operation: TOperation); override;
   public
@@ -74,15 +79,12 @@ type
   end;
 
   TComponentPopupMenu = class(TPopupMenu)
-    mnuNVCBStyle: TMenuItem;
-    mnuNVCBPosition: TMenuItem;
   private
     FMenuLine: TMenuItem;
 {$IFDEF DEBUG}
     procedure TestClick(Sender: TObject);
 {$ENDIF}
-    procedure StyleClick(Sender: TObject);
-    procedure PositionClick(Sender: TObject);
+    procedure SettingsClick(Sender: TObject);
   public
     constructor Create(AOwner: TComponent); override;
     procedure BuildContextMenu;
@@ -183,6 +185,43 @@ begin
     if Result.ClassName = 'TEditWindow' then
       Exit;
     Result := Result.Parent;
+  end;
+end;
+
+function ViewStyleToInt(Value: TViewStyle): Integer;
+begin
+  Result := Ord(Value);
+end;
+
+function IntToViewStyle(Value: Integer): TViewStyle;
+begin
+  if (Value >= Ord(vsIcon)) and (Value <= Ord(vsList)) then
+    Result := TViewStyle(Value)
+  else
+    Result := vsSmallIcon;
+end;
+
+function AlignToInt(Value: TAlign): Integer;
+begin
+  case Value of
+    alLeft: Result := 0;
+    alTop: Result := 1;
+    alRight: Result := 2;
+    alBottom: Result := 3;
+  else
+    Result := 0;
+  end;
+end;
+
+function IntToAlign(Value: Integer): TAlign;
+begin
+  case Value of
+    0: Result := alLeft;
+    1: Result := alTop;
+    2: Result := alRight;
+    3: Result := alBottom;
+  else
+    Result := alLeft;
   end;
 end;
 
@@ -429,17 +468,12 @@ var
 begin
   ini := TIniFile.Create(ChangeFileExt(GetModuleName(HInstance), '.ini'));
   try
-    case ini.ReadInteger('Settings', 'Position', 0) of
-      1: ChangeAlign(alTop);
-      2: ChangeAlign(alRight);
-      3: ChangeAlign(alBottom);
-    end;
+    FListView.ViewStyle := IntToViewStyle(ini.ReadInteger('Settings', 'Style', 1));
+    ChangeAlign(IntToAlign(ini.ReadInteger('Settings', 'Position', 0)));
+    FSplitter.Enabled := ini.ReadBool('Settings', 'SplitterEnabled', FSplitter.Enabled);
+    FSplitter.Color := ini.ReadInteger('Settings', 'SplitterColor', Integer(FSplitter.Color));
     Width := ini.ReadInteger('Settings', 'Width', 120);
     Height := ini.ReadInteger('Settings', 'Height', 80);
-    if ini.ReadInteger('Settings', 'Style', 1) = 0 then
-      FListView.ViewStyle := vsIcon
-    else
-      FListView.ViewStyle := vsSmallIcon;
   finally
     ini.Free;
   end;
@@ -451,23 +485,31 @@ var
 begin
   ini := TIniFile.Create(ChangeFileExt(GetModuleName(HInstance), '.ini'));
   try
-    case Align of
-      alTop: ini.WriteInteger('Settings', 'Position', 1);
-      alRight: ini.WriteInteger('Settings', 'Position', 2);
-      alBottom: ini.WriteInteger('Settings', 'Position', 3);
-    else
-      ini.WriteInteger('Settings', 'Position', 0);
-    end;
+    ini.WriteInteger('Settings', 'Style', ViewStyleToInt(FListView.ViewStyle));
+    ini.WriteInteger('Settings', 'Position', AlignToInt(Align));
+    ini.WriteBool('Settings', 'SplitterEnabled', FSplitter.Enabled);
+    ini.WriteInteger('Settings', 'SplitterColor', Integer(FSplitter.Color));
     ini.WriteInteger('Settings', 'Width', Width);
     ini.WriteInteger('Settings', 'Height', Height);
-    if FListView.ViewStyle = vsIcon then
-      ini.WriteInteger('Settings', 'Style', 0)
-    else
-      ini.WriteInteger('Settings', 'Style', 1);
   finally
     ini.Free;
   end;
 end;
+
+class procedure TComponentTray.UpdateTrays(Style, Position: Integer;
+  SplitterEnabled: Boolean; SplitterColor: TColor);
+var
+  i: Integer;
+begin
+  for i := 0 to FTrays.Count-1 do
+  begin
+    FTrays[i].FListView.ViewStyle := IntToViewStyle(Style);
+    FTrays[i].ChangeAlign(IntToAlign(Position));
+    FTrays[i].FSplitter.Enabled := SplitterEnabled;
+    FTrays[i].FSplitter.Color := SplitterColor;
+  end;
+end;
+
 procedure TComponentTray.AddItem(AItem: TPersistent);
 var
   li: TListItem;
@@ -714,15 +756,6 @@ end;
 { TComponentPopupMenu }
 
 constructor TComponentPopupMenu.Create(AOwner: TComponent);
-
-  function NewRadioItem(const ACaption: string; AChecked: Boolean;
-    AOnClick: TNotifyEvent; const AName: string): TMenuItem;
-  begin
-    Result := NewItem(ACaption, 0, AChecked, True, AOnClick, 0, AName);
-    Result.RadioItem := True;
-    Result.AutoCheck := True;
-  end;
-
 begin
   inherited;
   FMenuLine := NewLine;
@@ -731,17 +764,7 @@ begin
   Items.Add(NewItem('&Test', 0, False, True, TestClick, 0, 'mnuNVCBTest'));
 {$ENDIF}
 
-  mnuNVCBStyle := NewItem('&Style', 0, False, True, nil, 0, 'mnuNVCBStyle');
-  Items.Add(mnuNVCBStyle);
-  mnuNVCBStyle.Add(NewRadioItem('&Icon', False, StyleClick, 'mnuNVCBIcon'));
-  mnuNVCBStyle.Add(NewRadioItem('&Tile', True, StyleClick, 'mnuNVCBTile'));
-
-  mnuNVCBPosition := NewItem('&Position', 0, False, True, nil, 0, 'mnuNVCBPosition');
-  Items.Add(mnuNVCBPosition);
-  mnuNVCBPosition.Add(NewRadioItem('&Left', True, PositionClick, 'mnuNVCBLeft'));
-  mnuNVCBPosition.Add(NewRadioItem('&Top', False, PositionClick, 'mnuNVCBTop'));
-  mnuNVCBPosition.Add(NewRadioItem('&Right', False, PositionClick, 'mnuNVCBRight'));
-  mnuNVCBPosition.Add(NewRadioItem('&Bottom', False, PositionClick, 'mnuNVCBBottom'));
+  Items.Add(NewItem('&Settings', 0, False, True, SettingsClick, 0, 'mnuNVCBSettings'));
 end;
 
 procedure TComponentPopupMenu.BuildContextMenu;
@@ -788,18 +811,6 @@ begin
       Inc(insertPos);
     end;
   end;
-
-  if TComponentTray(Owner).FListView.ViewStyle = vsIcon then
-    mnuNVCBStyle[0].Checked := True
-  else
-    mnuNVCBStyle[1].Checked := True;
-
-  case TComponentTray(Owner).Align of
-    alLeft: mnuNVCBPosition[0].Checked := True;
-    alTop: mnuNVCBPosition[1].Checked := True;
-    alRight: mnuNVCBPosition[2].Checked := True;
-    alBottom: mnuNVCBPosition[3].Checked := True;
-  end;
 end;
 
 {$IFDEF DEBUG}
@@ -808,25 +819,22 @@ begin
 end;
 {$ENDIF}
 
-procedure TComponentPopupMenu.StyleClick(Sender: TObject);
+procedure TComponentPopupMenu.SettingsClick(Sender: TObject);
+var
+  style, position: Integer;
+  splitterEnabled: Boolean;
+  splitterColor: TColor;
 begin
-  case TMenuItem(Sender).MenuIndex of
-    0: TComponentTray(Owner).FListView.ViewStyle := vsIcon;
-    1: TComponentTray(Owner).FListView.ViewStyle := vsSmallIcon;
-  end;
-  TComponentTray(Owner).FListView.Arrange(arDefault);
-  TComponentTray(Owner).SaveSettings;
-end;
+  style := ViewStyleToInt(TComponentTray(Owner).FListView.ViewStyle);
+  position := AlignToInt(TComponentTray(Owner).Align);
+  splitterEnabled := TComponentTray(Owner).FSplitter.Enabled;
+  splitterColor := TComponentTray(Owner).FSplitter.Color;
 
-procedure TComponentPopupMenu.PositionClick(Sender: TObject);
-begin
-  case TMenuItem(Sender).MenuIndex of
-    0: TComponentTray(Owner).ChangeAlign(alLeft);
-    1: TComponentTray(Owner).ChangeAlign(alTop);
-    2: TComponentTray(Owner).ChangeAlign(alRight);
-    3: TComponentTray(Owner).ChangeAlign(alBottom);
+  if ShowSettingsDlg(style, position, splitterEnabled, splitterColor) then
+  begin
+    TComponentTray.UpdateTrays(style, position, splitterEnabled, splitterColor);
+    TComponentTray(Owner).SaveSettings;
   end;
-  TComponentTray(Owner).SaveSettings;
 end;
 
 { TComponentImageList }
