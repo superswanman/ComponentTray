@@ -56,6 +56,7 @@ type
     procedure ListViewKeyDown(Sender: TObject; var Key: Word; Shift: TShiftState);
     procedure ListViewMouseDown(Sender: TObject; Button: TMouseButton;
       Shift: TShiftState; X, Y: Integer);
+    procedure ListViewDblClick(Sender: TObject);
     procedure ListViewSelect(Sender: TObject; Item: TListItem; Selected: Boolean);
     procedure ListViewContextPopup(Sender: TObject; MousePos: TPoint; var Handled: Boolean);
     procedure SplitterMoved(Sender: TObject);
@@ -408,6 +409,7 @@ begin
   FListView.SmallImages := FCompImageList.ImageList;
   FListView.OnKeyDown := ListViewKeyDown;
   FListView.OnMouseDown := ListViewMouseDown;
+  FListView.OnDblClick := ListViewDblClick;
   FListView.OnSelectItem := ListViewSelect;
   FListView.OnContextPopup := ListViewContextPopup;
 
@@ -666,6 +668,14 @@ begin
   finally
     FListView.OnSelectItem := ListViewSelect;
   end;
+end;
+
+procedure TComponentTray.ListViewDblClick(Sender: TObject);
+begin
+  if FListView.ItemIndex = -1 then Exit;
+  if ActiveRoot = nil then Exit;
+
+  (ActiveRoot as IInternalRoot).Edit(TComponent(FListView.Items[FListView.ItemIndex].Data));
 end;
 
 procedure TComponentTray.ListViewSelect(Sender: TObject; Item: TListItem;
