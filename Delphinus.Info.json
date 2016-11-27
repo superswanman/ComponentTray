@@ -1,0 +1,8 @@
+{
+    "id": "{3D7E82DF-4273-4F2C-A453-F5A3D6AF733B}",
+    "name": "Component Tray",
+    "license_type": "MIT",
+    "license_file": "LICENSE",
+    "platforms": "Win32",
+    "compiler_min": 31
+}

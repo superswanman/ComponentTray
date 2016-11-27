@@ -7,3 +7,5 @@
 ## Supported versions
 
 RAD Studio 10 Seattle - 10.1 Berlin
+
+Delphinus-Support
