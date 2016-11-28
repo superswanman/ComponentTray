@@ -4,11 +4,11 @@ interface
 
 uses
   Winapi.Windows, System.SysUtils, System.Classes, System.Generics.Collections,
-  System.Rtti, System.TypInfo, FMX.Types, FMX.Controls, FMX.Forms, ToolsAPI,
-  ComponentDesigner, EmbeddedFormDesigner, DesignIntf, Events, PaletteAPI,
-  DesignMenus, DesignEditors, VCLMenus, FMXFormContainer, Vcl.Graphics,
-  Vcl.Controls, Vcl.Forms, Vcl.ExtCtrls, Vcl.ComCtrls, Vcl.Menus, Vcl.Dialogs,
-  Vcl.Tabs, Vcl.ImgList, System.IniFiles;
+  System.Generics.Defaults, System.Rtti, System.TypInfo, FMX.Types,
+  FMX.Controls, FMX.Forms, ToolsAPI, ComponentDesigner, EmbeddedFormDesigner,
+  DesignIntf, Events, PaletteAPI, DesignMenus, DesignEditors, VCLMenus,
+  FMXFormContainer, Vcl.Graphics, Vcl.Controls, Vcl.Forms, Vcl.ExtCtrls,
+  Vcl.ComCtrls, Vcl.Menus, Vcl.Dialogs, Vcl.Tabs, Vcl.ImgList, System.IniFiles;
 
 procedure Register;
 
@@ -52,16 +52,30 @@ type
     property SelectionEditor: ISelectionEditor read FSelectionEditor;
   end;
 
+  TTypeData = record
+    &Type: TClass;
+    Count: Integer;
+    Visible: Boolean;
+  end;
+
   TComponentTray = class(TPanel)
   private
     FListView: TListView;
     FSplitter: TSplitter;
+    FSortType: Integer;
+    FTypes: TDictionary<TClass,TTypeData>;
     procedure ListViewKeyDown(Sender: TObject; var Key: Word; Shift: TShiftState);
     procedure ListViewMouseDown(Sender: TObject; Button: TMouseButton;
       Shift: TShiftState; X, Y: Integer);
     procedure ListViewDblClick(Sender: TObject);
     procedure ListViewSelect(Sender: TObject; Item: TListItem; Selected: Boolean);
     procedure ListViewContextPopup(Sender: TObject; MousePos: TPoint; var Handled: Boolean);
+    procedure ListViewCompareCreationOrder(Sender: TObject; Item1, Item2: TListItem;
+      Data: Integer; var Compare: Integer);
+    procedure ListViewCompareName(Sender: TObject; Item1, Item2: TListItem;
+      Data: Integer; var Compare: Integer);
+    procedure ListViewCompareType(Sender: TObject; Item1, Item2: TListItem;
+      Data: Integer; var Compare: Integer);
     procedure SplitterMoved(Sender: TObject);
     procedure LoadSettings;
     procedure SaveSettings;
@@ -71,19 +85,28 @@ type
     procedure Notification(AComponent: TComponent; Operation: TOperation); override;
   public
     constructor Create(AOwner: TComponent); override;
+    destructor Destroy; override;
     procedure AddItem(AItem: TPersistent);
     procedure RemoveItem(AItem: TPersistent);
+    procedure UpdateCaptions;
     procedure UpdateItems(DoReplace: Boolean = False);
     procedure UpdateSelection(const ASelection: IDesignerSelections);
     procedure ChangeAlign(AValue: TAlign);
+    procedure Sort(SortType: Integer = -1);
   end;
 
   TComponentPopupMenu = class(TPopupMenu)
+    mnuNVCBFilter: TMenuItem;
+    mnuNVCBSort: TMenuItem;
   private
     FMenuLine: TMenuItem;
 {$IFDEF DEBUG}
     procedure TestClick(Sender: TObject);
 {$ENDIF}
+    procedure FilterClick(Sender: TObject);
+    procedure FilterCheckAllClick(Sender: TObject);
+    procedure FilterUncheckAllClick(Sender: TObject);
+    procedure SortClick(Sender: TObject);
     procedure SettingsClick(Sender: TObject);
   public
     constructor Create(AOwner: TComponent); override;
@@ -335,7 +358,7 @@ begin
   componentTray := GetComponentTrayByDesigner(ADesigner);
   if componentTray = nil then Exit;
 
-  componentTray.UpdateItems;
+  componentTray.UpdateCaptions;
   HideNonVisualComponents;
 end;
 
@@ -434,6 +457,8 @@ begin
   Width := 120;
   Parent := TWinControl(AOwner);
 
+  FTypes := TDictionary<TClass,TTypeData>.Create;
+
   FListView := TListView.Create(Self);
   FListView.BorderStyle := bsNone;
   FListView.IconOptions.AutoArrange := True;
@@ -451,6 +476,9 @@ begin
   FListView.OnDblClick := ListViewDblClick;
   FListView.OnSelectItem := ListViewSelect;
   FListView.OnContextPopup := ListViewContextPopup;
+  FListView.SortType := stData;
+  FListView.OnCompare := ListViewCompareCreationOrder;
+  FSortType := 0;
 
   FSplitter := TSplitter.Create(Self);
   FSplitter.Align := alLeft;
@@ -460,6 +488,12 @@ begin
   FSplitter.OnMoved := SplitterMoved;
 
   LoadSettings;
+end;
+
+destructor TComponentTray.Destroy;
+begin
+  FTypes.Free;
+  inherited;
 end;
 
 procedure TComponentTray.LoadSettings;
@@ -472,6 +506,9 @@ begin
     ChangeAlign(IntToAlign(ini.ReadInteger('Settings', 'Position', 0)));
     FSplitter.Enabled := ini.ReadBool('Settings', 'SplitterEnabled', FSplitter.Enabled);
     FSplitter.Color := ini.ReadInteger('Settings', 'SplitterColor', Integer(FSplitter.Color));
+    FSortType := ini.ReadInteger('Settings', 'SortType', FSortType);
+    if (FSortType < 0) or (FSortType > 2) then
+      FSortType := 0;
     Width := ini.ReadInteger('Settings', 'Width', 120);
     Height := ini.ReadInteger('Settings', 'Height', 80);
   finally
@@ -489,6 +526,7 @@ begin
     ini.WriteInteger('Settings', 'Position', AlignToInt(Align));
     ini.WriteBool('Settings', 'SplitterEnabled', FSplitter.Enabled);
     ini.WriteInteger('Settings', 'SplitterColor', Integer(FSplitter.Color));
+    ini.WriteInteger('Settings', 'SortType', FSortType);
     ini.WriteInteger('Settings', 'Width', Width);
     ini.WriteInteger('Settings', 'Height', Height);
   finally
@@ -513,6 +551,7 @@ end;
 procedure TComponentTray.AddItem(AItem: TPersistent);
 var
   li: TListItem;
+  data: TTypeData;
 begin
   if not IsNonVisualComponent(AItem) then Exit;
   if TComponent(AItem).Owner = nil then Exit;
@@ -520,6 +559,19 @@ begin
 
   // Ignore item that is not on current view
   if ActiveRoot.Root <> TComponent(AItem).Owner then Exit;
+
+  if not FTypes.TryGetValue(AItem.ClassType, data) then
+  begin
+    data.&Type := AItem.ClassType;
+    data.Count := 0;
+    data.Visible := True;
+  end;
+  Inc(data.Count);
+  FTypes.AddOrSetValue(AItem.ClassType, data);
+
+  // Filter
+  if FTypes.TryGetValue(AItem.ClassType, data) then
+    if not data.Visible then Exit;
 
   FListView.ClearSelection;
   li := FListView.Items.Add;
@@ -531,6 +583,7 @@ end;
 procedure TComponentTray.RemoveItem(AItem: TPersistent);
 var
   i: Integer;
+  data: TTypeData;
 begin
   if not IsNonVisualComponent(AItem) then Exit;
   if TComponent(AItem).HasParent then Exit;
@@ -543,6 +596,24 @@ begin
       Break;
     end;
   end;
+
+  if FTypes.TryGetValue(AItem.ClassType, data) then
+  begin
+    Dec(data.Count);
+    if data.Count = 0 then
+      FTypes.Remove(AItem.ClassType)
+    else
+      FTypes[AItem.ClassType] := data;
+  end;
+end;
+
+procedure TComponentTray.UpdateCaptions;
+var
+  i: Integer;
+begin
+  for i := 0 to FListView.Items.Count-1 do
+    FListView.Items[i].Caption := TComponent(FListView.Items[i].Data).Name;
+  Sort;
 end;
 
 procedure TComponentTray.UpdateItems(DoReplace: Boolean = False);
@@ -550,17 +621,22 @@ var
   root: IRoot;
   i: Integer;
   comp: TComponent;
-  li: TListItem;
   tmp: TWinControl;
+  cls: TClass;
+  data: TTypeData;
 begin
+  FListView.Clear;
   if not DoReplace then
   begin
-    for i := 0 to FListView.Items.Count-1 do
-      FListView.Items[i].Caption := TComponent(FListView.Items[i].Data).Name;
-    Exit;
-  end;
-
-  FListView.Clear;
+    for cls in FTypes.Keys do
+    begin
+      data := FTypes[cls];
+      data.Count := 0;
+      FTypes[cls] := data;
+    end;
+  end
+  else
+    FTypes.Clear;
 
   root := ActiveRoot;
   if root = nil then Exit;
@@ -572,13 +648,16 @@ begin
     Exit;
   end;
 
-  // Insert after ViewSelector at FMX environment
-  tmp := Parent;
-  Parent := nil;
-  Parent := tmp;
-  FSplitter.Parent := nil;
-  FSplitter.Parent := tmp;
-  ChangeAlign(Align);
+  if DoReplace then
+  begin
+    // Insert after ViewSelector at FMX environment
+    tmp := Parent;
+    Parent := nil;
+    Parent := tmp;
+    FSplitter.Parent := nil;
+    FSplitter.Parent := tmp;
+    ChangeAlign(Align);
+  end;
 
   HideNonVisualComponents;
 
@@ -587,14 +666,14 @@ begin
   for i := 0 to root.Root.ComponentCount-1 do
   begin
     comp := root.Root.Components[i];
-    if IsNonVisualComponent(comp) then
-    begin
-      li := FListView.Items.Add;
-      li.Caption := comp.Name;
-      li.ImageIndex := FCompImageList.AddOrGet(comp.ClassType);
-      li.Data := comp;
-    end;
+    AddItem(comp);
   end;
+  for cls in FTypes.Keys do
+  begin
+    if FTypes[cls].Count = 0 then
+      FTypes.Remove(cls);
+  end;
+  Sort;
 end;
 
 procedure TComponentTray.UpdateSelection(const ASelection: IDesignerSelections);
@@ -660,6 +739,20 @@ begin
 
   FListView.Align := alNone;
   FListView.Align := alClient;
+end;
+
+procedure TComponentTray.Sort(SortType: Integer = -1);
+begin
+  if (SortType >= 0) and (SortType <= 2) then
+  begin
+    FSortType := SortType;
+    case FSortType of
+      0: FListView.OnCompare := ListViewCompareCreationOrder;
+      1: FListView.OnCompare := ListViewCompareName;
+      2: FListView.OnCompare := ListViewCompareType;
+    end;
+  end;
+  FListView.AlphaSort;
 end;
 
 procedure TComponentTray.Notification(AComponent: TComponent;
@@ -748,6 +841,30 @@ begin
   TComponentPopupMenu(FListView.PopupMenu).BuildContextMenu;
 end;
 
+procedure TComponentTray.ListViewCompareCreationOrder(Sender: TObject;
+  Item1, Item2: TListItem; Data: Integer; var Compare: Integer);
+var
+  idx1, idx2: Integer;
+begin
+  idx1 := TComponent(Item1.Data).ComponentIndex;
+  idx2 := TComponent(Item2.Data).ComponentIndex;
+  Compare := idx1 - idx2;
+end;
+
+procedure TComponentTray.ListViewCompareName(Sender: TObject;
+  Item1, Item2: TListItem; Data: Integer; var Compare: Integer);
+begin
+  Compare := CompareText(TComponent(Item1.Data).Name, TComponent(Item2.Data).Name);
+end;
+
+procedure TComponentTray.ListViewCompareType(Sender: TObject;
+  Item1, Item2: TListItem; Data: Integer; var Compare: Integer);
+begin
+  Compare := CompareText(TComponent(Item1.Data).ClassName, TComponent(Item2.Data).ClassName);
+  if Compare = 0 then
+    Compare := CompareText(TComponent(Item1.Data).Name, TComponent(Item2.Data).Name);
+end;
+
 procedure TComponentTray.SplitterMoved(Sender: TObject);
 begin
   SaveSettings;
@@ -756,6 +873,15 @@ end;
 { TComponentPopupMenu }
 
 constructor TComponentPopupMenu.Create(AOwner: TComponent);
+
+  function NewRadioItem(const ACaption: string; AChecked: Boolean;
+    AOnClick: TNotifyEvent; const AName: string): TMenuItem;
+  begin
+    Result := NewItem(ACaption, 0, AChecked, True, AOnClick, 0, AName);
+    Result.RadioItem := True;
+    Result.AutoCheck := True;
+  end;
+
 begin
   inherited;
   FMenuLine := NewLine;
@@ -763,6 +889,17 @@ begin
 {$IFDEF DEBUG}
   Items.Add(NewItem('&Test', 0, False, True, TestClick, 0, 'mnuNVCBTest'));
 {$ENDIF}
+
+  mnuNVCBFilter := NewItem('&Filter', 0, False, True, nil, 0, 'mnuNVCBFilter');
+  Items.Add(mnuNVCBFilter);
+
+  mnuNVCBSort := NewItem('S&ort', 0, False, True, nil, 0, 'mnuNVCBSort');
+  Items.Add(mnuNVCBSort);
+  mnuNVCBSort.Add(NewRadioItem('Sort by &Creation Order', True, SortClick, 'mnuNVCBSortByCreationOrder'));
+  mnuNVCBSort.Add(NewRadioItem('Sort by &Name', False, SortClick, 'mnuNVCBSortByName'));
+  mnuNVCBSort.Add(NewRadioItem('Sort by &Type', False, SortClick, 'mnuNVCBSortByType'));
+
+  Items.Add(NewLine);
 
   Items.Add(NewItem('&Settings', 0, False, True, SettingsClick, 0, 'mnuNVCBSettings'));
 end;
@@ -774,6 +911,8 @@ var
   i, j, insertPos: Integer;
   componentEditor: IComponentEditor;
   menuitem: TMenuItem;
+  data: TTypeData;
+  types: TList<TTypeData>;
 begin
   // Remove menus that were added dynamicaly
   while FMenuLine.MenuIndex > 0 do
@@ -811,6 +950,35 @@ begin
       Inc(insertPos);
     end;
   end;
+
+  mnuNVCBFilter.Clear;
+  mnuNVCBFilter.Visible := TComponentTray(Owner).FTypes.Count > 0;
+  if mnuNVCBFilter.Visible then
+  begin
+    types := TList<TTypeData>.Create;
+    try
+      for data in TComponentTray(Owner).FTypes.Values do
+        types.Add(data);
+      types.Sort(TComparer<TTypeData>.Construct(
+        function(const Left, Right: TTypeData): Integer
+        begin
+          Result := CompareText(Left.&Type.ClassName, Right.&Type.ClassName);
+        end));
+      for i := 0 to types.Count-1 do
+      begin
+        menuitem := NewItem(types[i].&Type.ClassName, 0, types[i].Visible, True, FilterClick, 0, '');
+        menuitem.Tag := NativeInt(types[i].&Type);
+        mnuNVCBFilter.Add(menuitem);
+      end;
+    finally
+      types.Free;
+    end;
+    mnuNVCBFilter.Add(NewLine);
+    mnuNVCBFilter.Add(NewItem('&Check All', 0, False, True, FilterCheckAllClick, 0, 'mnuNVCBFilterCheckAll'));
+    mnuNVCBFilter.Add(NewItem('&Uncheck All', 0, False, True, FilterUncheckAllClick, 0, 'mnuNVCBFilterUncheckAll'));
+  end;
+
+  mnuNVCBSort[TComponentTray(Owner).FSortType].Checked := True;
 end;
 
 {$IFDEF DEBUG}
@@ -818,6 +986,54 @@ procedure TComponentPopupMenu.TestClick(Sender: TObject);
 begin
 end;
 {$ENDIF}
+
+procedure TComponentPopupMenu.FilterClick(Sender: TObject);
+var
+  cls: TClass;
+  data: TTypeData;
+begin
+  cls := TClass(TMenuItem(Sender).Tag);
+  if TComponentTray(Owner).FTypes.TryGetValue(cls, data) then
+  begin
+    data.Visible := not data.Visible;
+    TComponentTray(Owner).FTypes[cls] := data;
+    TComponentTray(Owner).UpdateItems(False);
+  end;
+end;
+
+procedure TComponentPopupMenu.FilterCheckAllClick(Sender: TObject);
+var
+  cls: TClass;
+  data: TTypeData;
+begin
+  for cls in TComponentTray(Owner).FTypes.Keys do
+  begin
+    data := TComponentTray(Owner).FTypes[cls];
+    data.Visible := True;
+    TComponentTray(Owner).FTypes[cls] := data;
+  end;
+  TComponentTray(Owner).UpdateItems(False);
+end;
+
+procedure TComponentPopupMenu.FilterUncheckAllClick(Sender: TObject);
+var
+  cls: TClass;
+  data: TTypeData;
+begin
+  for cls in TComponentTray(Owner).FTypes.Keys do
+  begin
+    data := TComponentTray(Owner).FTypes[cls];
+    data.Visible := False;
+    TComponentTray(Owner).FTypes[cls] := data;
+  end;
+  TComponentTray(Owner).UpdateItems(False);
+end;
+
+procedure TComponentPopupMenu.SortClick(Sender: TObject);
+begin
+  TComponentTray(Owner).Sort(TMenuItem(Sender).MenuIndex);
+  TComponentTray(Owner).SaveSettings;
+end;
 
 procedure TComponentPopupMenu.SettingsClick(Sender: TObject);
 var
