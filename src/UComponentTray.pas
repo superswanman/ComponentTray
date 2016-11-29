@@ -8,7 +8,8 @@ uses
   FMX.Controls, FMX.Forms, ToolsAPI, ComponentDesigner, EmbeddedFormDesigner,
   DesignIntf, Events, PaletteAPI, DesignMenus, DesignEditors, VCLMenus,
   FMXFormContainer, Vcl.Graphics, Vcl.Controls, Vcl.Forms, Vcl.ExtCtrls,
-  Vcl.ComCtrls, Vcl.Menus, Vcl.Dialogs, Vcl.Tabs, Vcl.ImgList, System.IniFiles;
+  Vcl.ComCtrls, Vcl.Menus, Vcl.Dialogs, Vcl.Tabs, Vcl.ImgList, System.IniFiles,
+  Winapi.ActiveX;
 
 procedure Register;
 
@@ -58,11 +59,25 @@ type
     Visible: Boolean;
   end;
 
-  TComponentTray = class(TPanel)
+  TComponentTray = class;
+
+  TOTAPaletteDragAcceptor = class(TInterfacedObject, IOTAPaletteDragAcceptor, IOTADesignerDragAcceptor)
+  private
+    FControl: TComponentTray;
+    { IOTAPaletteDragAcceptor }
+    function GetHandle: THandle;
+  public
+    constructor Create(AControl: TComponentTray);
+  end;
+
+  TComponentTray = class(TPanel, IDropTarget)
   private
     FListView: TListView;
     FSplitter: TSplitter;
     FSortType: Integer;
+    FAcceptor: IOTAPaletteDragAcceptor;
+    FAcceptorIndex: Integer;
+    FDragAllowed: Boolean;
     FTypes: TDictionary<TClass,TTypeData>;
     procedure ListViewKeyDown(Sender: TObject; var Key: Word; Shift: TShiftState);
     procedure ListViewMouseDown(Sender: TObject; Button: TMouseButton;
@@ -81,7 +96,21 @@ type
     procedure SaveSettings;
     class procedure UpdateTrays(Style, Position: Integer;
       SplitterEnabled: Boolean; SplitterColor: TColor); static;
+    { IDropTarget }
+    function DropTarget_DragEnter(const dataObj: IDataObject; grfKeyState: Longint;
+      pt: TPoint; var dwEffect: Longint): HResult; stdcall;
+    function DropTarget_DragOver(grfKeyState: Longint; pt: TPoint;
+      var dwEffect: Longint): HResult; stdcall;
+    function DropTarget_DragLeave: HResult; stdcall;
+    function DropTarget_Drop(const dataObj: IDataObject; grfKeyState: Longint; pt: TPoint;
+      var dwEffect: Longint): HResult; stdcall;
+    function IDropTarget.DragEnter = DropTarget_DragEnter;
+    function IDropTarget.DragOver = DropTarget_DragOver;
+    function IDropTarget.DragLeave = DropTarget_DragLeave;
+    function IDropTarget.Drop = DropTarget_Drop;
   protected
+    procedure CreateWnd; override;
+    procedure DestroyWnd; override;
     procedure Notification(AComponent: TComponent; Operation: TOperation); override;
   public
     constructor Create(AOwner: TComponent); override;
@@ -138,13 +167,18 @@ var
   FComponentDeleting: Boolean;
   FComponentSelecting: Boolean;
 
-function IsNonVisualComponent(Instance: TPersistent): Boolean;
+function IsNonVisualComponent(AClass: TClass): Boolean; overload;
 begin
-  Result := (Instance <> nil) and
-            (Instance is TComponent) and
-            not (Instance is Vcl.Controls.TControl) and
-            not (Instance is FMX.Controls.TControl) and
-            not (Instance is FMX.Forms.TCommonCustomForm);
+  Result := (AClass <> nil)
+            and AClass.InheritsFrom(TComponent)
+            and not AClass.InheritsFrom(Vcl.Controls.TControl)
+            and not AClass.InheritsFrom(FMX.Controls.TControl)
+            and not AClass.InheritsFrom(FMX.Forms.TCommonCustomForm);
+end;
+
+function IsNonVisualComponent(Instance: TPersistent): Boolean; overload;
+begin
+  Result := (Instance <> nil) and IsNonVisualComponent(Instance.ClassType);
 end;
 
 procedure HideNonVisualComponents;
@@ -447,6 +481,21 @@ begin
   end;
 end;
 
+{ TOTAPaletteDragAcceptor }
+
+constructor TOTAPaletteDragAcceptor.Create(AControl: TComponentTray);
+begin
+  inherited Create;
+  FControl := AControl;
+end;
+
+function TOTAPaletteDragAcceptor.GetHandle: THandle;
+begin
+  RevokeDragDrop(FControl.Handle);
+  Result := FControl.Handle;
+  RegisterDragDrop(FControl.Handle, FControl);
+end;
+
 { TComponentTray }
 
 constructor TComponentTray.Create(AOwner: TComponent);
@@ -487,11 +536,17 @@ begin
   FSplitter.Parent := Parent;
   FSplitter.OnMoved := SplitterMoved;
 
+  FAcceptor := TOTAPaletteDragAcceptor.Create(Self);
+  FAcceptorIndex := (BorlandIDEServices as IOTAPaletteServices).RegisterDragAcceptor(FAcceptor);
+
   LoadSettings;
 end;
 
 destructor TComponentTray.Destroy;
 begin
+  if FAcceptorIndex >= 0 then
+    (BorlandIDEServices as IOTAPaletteServices).UnRegisterDragAcceptor(FAcceptorIndex);
+  FAcceptor := nil;
   FTypes.Free;
   inherited;
 end;
@@ -555,7 +610,12 @@ var
 begin
   if not IsNonVisualComponent(AItem) then Exit;
   if TComponent(AItem).Owner = nil then Exit;
-  if TComponent(AItem).HasParent then Exit;
+  if TComponent(AItem).HasParent then
+  begin
+    if ActiveRoot = nil then Exit;
+    if TComponent(AItem).GetParentComponent = nil then Exit;
+    if ActiveRoot.Root <> TComponent(AItem).GetParentComponent then Exit;
+  end;
 
   // Ignore item that is not on current view
   if ActiveRoot.Root <> TComponent(AItem).Owner then Exit;
@@ -573,7 +633,6 @@ begin
   if FTypes.TryGetValue(AItem.ClassType, data) then
     if not data.Visible then Exit;
 
-  FListView.ClearSelection;
   li := FListView.Items.Add;
   li.Caption := TComponent(AItem).Name;
   li.ImageIndex := FCompImageList.AddOrGet(AItem.ClassType);
@@ -755,6 +814,18 @@ begin
   FListView.AlphaSort;
 end;
 
+procedure TComponentTray.CreateWnd;
+begin
+  inherited;
+  RegisterDragDrop(Handle, Self);
+end;
+
+procedure TComponentTray.DestroyWnd;
+begin
+  RevokeDragDrop(Handle);
+  inherited;
+end;
+
 procedure TComponentTray.Notification(AComponent: TComponent;
   Operation: TOperation);
 begin
@@ -868,6 +939,67 @@ end;
 procedure TComponentTray.SplitterMoved(Sender: TObject);
 begin
   SaveSettings;
+end;
+
+function TComponentTray.DropTarget_DragEnter(const dataObj: IDataObject;
+  grfKeyState: Longint; pt: TPoint; var dwEffect: Longint): HResult;
+var
+  getPaletteItem: IOTAGetPaletteItem;
+  paletteDragDropOp: IOTAPaletteDragDropOp;
+  componentPaletteItem: IOTAComponentPaletteItem;
+  ctx: TRttiContext;
+  typ: TRttiType;
+begin
+  FDragAllowed := False;
+  Result := S_OK;
+  dwEffect := DROPEFFECT_NONE;
+  if not Supports(dataObj, IOTAGetPaletteItem, getPaletteItem) then Exit;
+  if not Supports(getPaletteItem.GetPaletteItem, IOTAPaletteDragDropOp, paletteDragDropOp) then Exit;
+  if not Supports(getPaletteItem.GetPaletteItem, IOTAComponentPaletteItem, componentPaletteItem) then Exit;
+
+  typ := ctx.FindType(componentPaletteItem.UnitName + '.' + componentPaletteItem.ClassName);
+  if typ = nil then Exit;
+  if not (typ is TRttiInstanceType) then Exit;
+  if not IsNonVisualComponent(TRttiInstanceType(typ).MetaclassType) then Exit;
+
+  dwEffect := DROPEFFECT_COPY;
+  FDragAllowed := True;
+end;
+
+function TComponentTray.DropTarget_DragOver(grfKeyState: Longint; pt: TPoint;
+  var dwEffect: Longint): HResult;
+begin
+  Result := S_OK;
+  if FDragAllowed then
+    dwEffect := DROPEFFECT_COPY
+  else
+    dwEffect := DROPEFFECT_NONE;
+end;
+
+function TComponentTray.DropTarget_DragLeave: HResult;
+begin
+  Result := S_OK;
+  FDragAllowed := False;
+end;
+
+function TComponentTray.DropTarget_Drop(const dataObj: IDataObject; grfKeyState: Longint;
+  pt: TPoint; var dwEffect: Longint): HResult;
+var
+  getPaletteItem: IOTAGetPaletteItem;
+begin
+  Result := S_OK;
+  dwEffect := DROPEFFECT_NONE;
+  try
+    if not FDragAllowed then Exit;
+    if Supports(dataObj, IOTAGetPaletteItem, getPaletteItem) then
+    begin
+      getPaletteItem.GetPaletteItem.Execute;
+      dwEffect := DROPEFFECT_COPY;
+    end;
+    ActiveDesigner.Environment.ResetCompClass;
+  finally
+    FDragAllowed := False;
+  end;
 end;
 
 { TComponentPopupMenu }

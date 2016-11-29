@@ -29,8 +29,6 @@ object SettingsDlg: TSettingsDlg
     Caption = 'OK'
     ModalResult = 1
     TabOrder = 0
-    ExplicitLeft = 481
-    ExplicitTop = 276
   end
   object Button2: TButton
     Left = 170
@@ -41,8 +39,6 @@ object SettingsDlg: TSettingsDlg
     Caption = 'Cancel'
     ModalResult = 2
     TabOrder = 1
-    ExplicitLeft = 562
-    ExplicitTop = 276
   end
   object rgStyle: TRadioGroup
     Left = 8
