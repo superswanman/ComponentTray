@@ -1,5 +1,5 @@
 ﻿unit UComponentTray;
-
+
 interface
 
 uses
@@ -1225,6 +1225,78 @@ var
     end;
   end;
 
+  procedure SmoothResize(aBmp: TBitmap; NuWidth, NuHeight: Integer);
+  type
+    TRGBArray = array[Word] of TRGBTriple;
+    pRGBArray = ^TRGBArray;
+  var
+    X, Y: Integer;
+    xP, yP: Integer;
+    xP2, yP2: Integer;
+    SrcLine1, SrcLine2: pRGBArray;
+    t3: Integer;
+    z, z2, iz2: Integer;
+    DstLine: pRGBArray;
+    DstGap: Integer;
+    w1, w2, w3, w4: Integer;
+    Dst: TBitmap;
+  begin
+    if (aBmp.Width = NuWidth) and (aBmp.Height = NuHeight) then
+      Exit;
+
+    aBmp.PixelFormat := pf24Bit;
+
+    Dst := TBitmap.Create;
+    Dst.PixelFormat := pf24Bit;
+    Dst.Width := NuWidth;
+    Dst.Height := NuHeight;
+
+    DstLine := Dst.ScanLine[0];
+    DstGap := Integer(Dst.ScanLine[1]) - Integer(DstLine);
+
+    xP2 := MulDiv(aBmp.Width - 1, $10000, Dst.Width);
+    yP2 := MulDiv(aBmp.Height - 1, $10000, Dst.Height);
+    yP := 0;
+
+    for Y := 0 to Dst.Height - 1 do begin
+      xP := 0;
+      SrcLine1 := aBmp.ScanLine[yP shr 16];
+
+      if (yP shr 16 < aBmp.Height - 1) then
+        SrcLine2 := aBmp.ScanLine[Succ(yP shr 16)]
+      else
+        SrcLine2 := aBmp.ScanLine[yP shr 16];
+
+      z2 := Succ(yP and $FFFF);
+      iz2 := Succ((not yP) and $FFFF);
+      for X := 0 to Dst.Width - 1 do begin
+        t3 := xP shr 16;
+        z := xP and $FFFF;
+        w2 := MulDiv(z, iz2, $10000);
+        w1 := iz2 - w2;
+        w4 := MulDiv(z, z2, $10000);
+        w3 := z2 - w4;
+        DstLine[X].rgbtRed :=
+          (SrcLine1[t3].rgbtRed * w1 + SrcLine1[t3 + 1].rgbtRed * w2 +
+          SrcLine2[t3].rgbtRed * w3 + SrcLine2[t3 + 1].rgbtRed * w4) shr 16;
+        DstLine[X].rgbtGreen :=
+          (SrcLine1[t3].rgbtGreen * w1 + SrcLine1[t3 + 1].rgbtGreen * w2 +
+          SrcLine2[t3].rgbtGreen * w3 + SrcLine2[t3 + 1].rgbtGreen * w4) shr 16;
+        DstLine[X].rgbtBlue :=
+          (SrcLine1[t3].rgbtBlue * w1 + SrcLine1[t3 + 1].rgbtBlue * w2 +
+          SrcLine2[t3].rgbtBlue * w3 + SrcLine2[t3 + 1].rgbtBlue * w4) shr 16;
+        Inc(xP, xP2);
+      end;
+      Inc(yP, yP2);
+      DstLine := pRGBArray(Integer(DstLine) + DstGap);
+    end;
+
+    aBmp.Width := Dst.Width;
+    aBmp.Height := Dst.Height;
+    aBmp.Canvas.Draw(0, 0, Dst);
+    Dst.Free;
+  end;
+
   function LoadIconImage(const Name: string): Integer;
   var
     bmp: TBitmap;
@@ -1239,7 +1311,18 @@ var
       try
         bmp.LoadFromResourceName(data.HInstance, Name);
         bmp.Transparent := True;
-        Result := FImageList.AddMasked(bmp, bmp.Canvas.Pixels[0, bmp.Height-1]);
+        try
+          if (bmp.Width <> 24) or (bmp.Height <> 24) then
+            SmoothResize(bmp, 24, 24);
+          Result := FImageList.AddMasked(bmp, bmp.Canvas.Pixels[0, bmp.Height-1]);
+        except
+          on e: Exception do begin
+            Result := -1;
+            {$IFDEF DEBUG}
+            ShowMessage(Format('LoadIconImage(%s) Error: %s', [Name, e.Message]));
+            {$ENDIF}
+          end;
+        end;
         Exit;
       finally
         bmp.Free;
