@@ -182,41 +182,11 @@ begin
 end;
 
 procedure HideNonVisualComponents;
-var
-  surface: IComponentDesignSurface;
-  options: TDesignerOptions;
-  surfaceOptions: TDesignSurfaceOptions;
-
-  function GetComponentDesignSurface: IComponentDesignSurface;
-  var
-    ctx: TRttiContext;
-    typ: TRttiType;
-    fld: TRttiField;
-  begin
-    typ := ctx.GetType(TComponentRoot);
-    if typ = nil then Exit;
-    fld := typ.GetField('FSurface');
-    if fld = nil then Exit;
-    Result := IComponentDesignSurface(fld.GetValue((ActiveRoot as IInternalRoot).Implementor).AsInterface);
-  end;
-
 begin
   if ActiveRoot = nil then Exit;
   if ActiveRoot.Root is TDataModule then Exit;
-  surface := GetComponentDesignSurface;
-  if surface = nil then Exit;
 
   (BorlandIDEServices as IOTAServices).GetEnvironmentOptions.Values['ShowNonVisualComponents'] := False;
-
-  ActiveDesigner.Environment.GetDesignerOptions(options);
-  options.ShowNonVisualComponents := False;
-  surfaceOptions.DisplayGrid := options.DisplayGrid;
-  surfaceOptions.GridSize := Point(options.GridSizeX, options.GridSizeY);
-  surfaceOptions.ShowComponentCaptions := options.ShowComponentCaptions;
-  surfaceOptions.ShowDesignerHints := options.ShowDesignerHints;
-  surfaceOptions.ShowNonVisualComponents := options.ShowNonVisualComponents;
-  surfaceOptions.ShowExtendedControlHints := options.ShowExtendedControlHints;
-  surface.SetOptions(surfaceOptions);
 end;
 
 function GetComponentTray(AControl: TWinControl): TComponentTray;
